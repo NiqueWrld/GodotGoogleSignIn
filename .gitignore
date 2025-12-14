@@ -1,0 +1,21 @@
+# Build artifacts
+plugin/build/
+plugin/.gradle/
+*.aar
+!addons/GodotGoogleSignIn/bin/release/*.aar
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Gradle
+.gradle/
+local.properties
+
+# Godot
+.godot/
+*.import
