@@ -10,6 +10,7 @@ A native Android plugin for Godot 4.2+ that enables Google Sign-In using the mod
 - ✅ Supports Godot 4.2+ (v2 plugin architecture)
 - ✅ Auto-select previously signed-in accounts
 - ✅ Account chooser support
+- ✅ Custom nonce support for backend verification (Supabase, Firebase, custom OIDC)
 
 ## Requirements
 
@@ -104,8 +105,11 @@ func _on_sign_out_complete():
 | `initialize(web_client_id: String)` | Initialize with your Web Client ID from Google Cloud Console |
 | `isInitialized() -> bool` | Check if plugin is initialized |
 | `signIn()` | Start sign-in flow (auto-selects if previously authorized) |
+| `signInWithNonce(raw_nonce: String)` | Same as `signIn()` but uses a caller-supplied raw nonce for backend verification |
 | `signInWithAccountChooser()` | Sign in with account picker |
+| `signInWithAccountChooserWithNonce(raw_nonce: String)` | Same as `signInWithAccountChooser()` with a caller-supplied raw nonce |
 | `signInWithGoogleButton()` | Sign in using Google's branded button flow |
+| `signInWithGoogleButtonWithNonce(raw_nonce: String)` | Same as `signInWithGoogleButton()` with a caller-supplied raw nonce |
 | `signOut()` | Sign out and clear credential state |
 
 ### Signals
@@ -134,6 +138,50 @@ func _sign_in_with_firebase(google_id_token: String):
     var http = HTTPRequest.new()
     add_child(http)
     http.request(url, ["Content-Type: application/json"], HTTPClient.METHOD_POST, JSON.stringify(body))
+```
+
+## Backend Verification with Nonce (Supabase / Firebase / Custom OIDC)
+
+Backends that enforce OIDC replay protection (e.g. Supabase `signInWithIdToken`, Firebase Admin SDK) require a **raw nonce** to verify the ID token's `nonce` claim.
+
+**How it works:**
+1. Your app generates a random raw nonce.
+2. You pass it to one of the `WithNonce` methods; the plugin SHA-256 hashes it and forwards the hash to Google.
+3. Google embeds that hash in the ID token's `nonce` claim.
+4. On `sign_in_success` you send both the `id_token` **and** your original raw nonce to your backend; the backend hashes the raw nonce and compares it to the claim.
+
+```gdscript
+extends Node
+
+var google_sign_in: Object = null
+var _raw_nonce: String = ""
+
+func _ready():
+    if OS.get_name() == "Android" and Engine.has_singleton("GodotGoogleSignIn"):
+        google_sign_in = Engine.get_singleton("GodotGoogleSignIn")
+        google_sign_in.connect("sign_in_success", _on_sign_in_success)
+        google_sign_in.connect("sign_in_failed", _on_sign_in_failed)
+        google_sign_in.initialize("YOUR_WEB_CLIENT_ID.apps.googleusercontent.com")
+
+func sign_in_with_backend():
+    if google_sign_in:
+        # Generate a cryptographically random raw nonce
+        var crypto = Crypto.new()
+        _raw_nonce = crypto.generate_random_bytes(32).hex_encode()
+        google_sign_in.signInWithNonce(_raw_nonce)
+
+func _on_sign_in_success(id_token: String, email: String, display_name: String):
+    # Send id_token + raw nonce to your backend
+    _authenticate_with_supabase(id_token, _raw_nonce)
+
+func _authenticate_with_supabase(id_token: String, raw_nonce: String):
+    # Example: Supabase signInWithIdToken
+    var body = JSON.stringify({
+        "provider": "google",
+        "id_token": id_token,
+        "nonce": raw_nonce  # raw (unhashed) nonce
+    })
+    # POST to your Supabase endpoint ...
 ```
 
 ## Building from Source
