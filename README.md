@@ -11,6 +11,7 @@ A native Android plugin for Godot 4.2+ that enables Google Sign-In using the mod
 - ✅ Auto-select previously signed-in accounts
 - ✅ Account chooser support
 - ✅ Custom nonce support for backend verification (Supabase, Firebase, custom OIDC)
+- ✅ Silent (non-interactive) sign-in for auto-login and session recovery
 
 ## Requirements
 
@@ -111,13 +112,16 @@ func _on_sign_out_complete():
 | `signInWithGoogleButton()` | Sign in using Google's branded button flow |
 | `signInWithGoogleButtonWithNonce(raw_nonce: String)` | Same as `signInWithGoogleButton()` with a caller-supplied raw nonce |
 | `signOut()` | Sign out and clear credential state |
+| `silentSignIn()` | Attempt non-interactive sign-in; emits `silent_sign_in_failed` if interaction would be required |
+| `silentSignInWithNonce(raw_nonce: String)` | Same as `silentSignIn()` with a caller-supplied raw nonce |
 
 ### Signals
 
 | Signal | Parameters | Description |
 |--------|------------|-------------|
-| `sign_in_success` | `id_token: String, email: String, display_name: String` | Emitted on successful sign-in |
-| `sign_in_failed` | `error: String` | Emitted when sign-in fails |
+| `sign_in_success` | `id_token: String, email: String, display_name: String` | Emitted on successful sign-in (all methods including silent) |
+| `sign_in_failed` | `error: String` | Emitted when an interactive sign-in fails |
+| `silent_sign_in_failed` | `error: String` | Emitted when silent sign-in cannot resolve without UI |
 | `sign_out_complete` | None | Emitted when sign-out completes |
 
 ## Firebase Authentication
@@ -182,6 +186,55 @@ func _authenticate_with_supabase(id_token: String, raw_nonce: String):
         "nonce": raw_nonce  # raw (unhashed) nonce
     })
     # POST to your Supabase endpoint ...
+```
+
+## Silent Sign-In (Auto-Login / Session Recovery)
+
+Use `silentSignIn()` to attempt sign-in without showing any UI — ideal for auto-login on startup or recovering a session after a 401 error.
+
+**How it works:**
+- Credential Manager attempts to resolve the sign-in automatically using a previously authorized account with `setAutoSelectEnabled(true)`.
+- If exactly one authorized account is available it resolves silently and `sign_in_success` is emitted — no UI is shown.
+- If no authorized account can be resolved automatically, `silent_sign_in_failed` is emitted immediately. The app can then decide whether to call `signIn()` / `signInWithGoogleButton()` to show the full picker, or leave the user in an anonymous/logged-out state.
+
+```gdscript
+# Using the google_sign_in.gd wrapper (recommended)
+extends Node
+
+@onready var auth = $GoogleSignIn  # node with google_sign_in.gd attached
+
+func _ready() -> void:
+    auth.initialize("YOUR_WEB_CLIENT_ID.apps.googleusercontent.com")
+    auth.sign_in_success.connect(_on_sign_in_success)
+    auth.sign_in_failed.connect(_on_sign_in_failed)
+    auth.silent_sign_in_failed.connect(_on_silent_sign_in_failed)
+
+    # Try silent sign-in first; only show UI if it fails.
+    auth.silent_sign_in()
+
+func _on_sign_in_success(id_token: String, email: String, _display_name: String) -> void:
+    print("Signed in as: ", email)
+
+func _on_sign_in_failed(error: String) -> void:
+    print("Interactive sign-in failed: ", error)
+
+func _on_silent_sign_in_failed(_error: String) -> void:
+    # No authorized account — show the picker or stay logged out.
+    auth.sign_in_with_google_button()
+```
+
+For backend verification combine silent sign-in with a nonce:
+
+```gdscript
+var _raw_nonce: String = ""
+
+func try_auto_login() -> void:
+    var crypto = Crypto.new()
+    _raw_nonce = crypto.generate_random_bytes(32).hex_encode()
+    auth.silent_sign_in_with_nonce(_raw_nonce)
+
+func _on_sign_in_success(id_token: String, _email: String, _display_name: String) -> void:
+    _authenticate_with_backend(id_token, _raw_nonce)
 ```
 
 ## Building from Source
