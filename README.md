@@ -248,16 +248,52 @@ func _on_sign_in_success(id_token: String, _email: String, _display_name: String
 ### Build Steps
 
 1. Clone this repository
-2. Navigate to `plugin/`
-3. Update `local.properties` with your Android SDK path:
+
+2. **Download the Godot AAR library** and place it in `plugin/libs/`:
+   - On the [Godot downloads page](https://godotengine.org/download), find the "AAR" link for your platform and version
+   - Or download directly, e.g.:
+     ```bash
+     # Adjust the version number to match your Godot version
+     cp ~/Downloads/godot-lib.*.aar plugin/libs/
+     ```
+   - See `plugin/libs/README.md` for more options (TuxFamily, local Godot installation)
+
+3. **Point Gradle at your Android SDK** — choose the method for your platform:
+
+   **macOS / Linux** — set the `ANDROID_HOME` environment variable:
+   ```bash
+   export ANDROID_HOME=~/Library/Android/sdk   # macOS typical path
+   # or add to your shell profile to make it permanent
+   ```
+
+   **Windows** — create `plugin/local.properties`:
    ```
    sdk.dir=C\:\\Users\\YourName\\AppData\\Local\\Android\\Sdk
    ```
-4. Build:
+
+4. **Build** from the `plugin/` directory:
+
+   **macOS / Linux:**
    ```bash
-   ./gradlew assembleRelease
+   cd plugin && ./gradlew bundleReleaseAar
    ```
-5. The AAR will be in `build/outputs/aar/`
+
+   **Windows:**
+   ```bat
+   cd plugin
+   gradlew.bat assembleRelease
+   ```
+
+   A successful build prints `BUILD SUCCESSFUL` and produces the AAR at:
+   ```
+   plugin/build/outputs/aar/GoogleSignIn-release.aar
+   ```
+
+5. Copy the AAR to your Godot project's `addons/GodotGoogleSignIn/` folder.
+   You may need to rename it:
+   ```bash
+   mv GoogleSignIn-release.aar GodotGoogleSignIn-release.aar
+   ```
 
 ## Dependencies
 
