@@ -127,18 +127,20 @@ class GodotGoogleSignIn(godot: Godot) : GodotPlugin(godot) {
     }
 
     private fun signInInternal(rawNonce: String?, silent: Boolean = false) {
+        val failSignal = if (silent) silentSignInFailedSignal.name else signInFailedSignal.name
+
         if (webClientId.isEmpty()) {
-            emitSignal(signInFailedSignal.name, "Plugin not initialized. Call initialize() first.")
+            emitSignal(failSignal, "Plugin not initialized. Call initialize() first.")
             return
         }
-        
+
         val act = activity ?: run {
-            emitSignal(signInFailedSignal.name, "Activity not available")
+            emitSignal(failSignal, "Activity not available")
             return
         }
-        
+
         val cm = getOrCreateCredentialManager() ?: run {
-            emitSignal(signInFailedSignal.name, "CredentialManager not available")
+            emitSignal(failSignal, "CredentialManager not available")
             return
         }
 

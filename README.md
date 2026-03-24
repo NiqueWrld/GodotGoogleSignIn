@@ -121,7 +121,7 @@ func _on_sign_out_complete():
 |--------|------------|-------------|
 | `sign_in_success` | `id_token: String, email: String, display_name: String` | Emitted on successful sign-in (all methods including silent) |
 | `sign_in_failed` | `error: String` | Emitted when an interactive sign-in fails |
-| `silent_sign_in_failed` | `error: String` | Emitted when silent sign-in cannot resolve without UI |
+| `silent_sign_in_failed` | `error: String` | Emitted when sign-in fails with an unrecoverable error (interactive or silent) |
 | `sign_out_complete` | None | Emitted when sign-out completes |
 
 ## Firebase Authentication
