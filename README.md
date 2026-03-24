@@ -10,6 +10,8 @@ A native Android plugin for Godot 4.2+ that enables Google Sign-In using the mod
 - ✅ Supports Godot 4.2+ (v2 plugin architecture)
 - ✅ Auto-select previously signed-in accounts
 - ✅ Account chooser support
+- ✅ Custom nonce support for backend verification (Supabase, Firebase, custom OIDC)
+- ✅ Silent (non-interactive) sign-in for auto-login and session recovery
 
 ## Requirements
 
@@ -104,16 +106,22 @@ func _on_sign_out_complete():
 | `initialize(web_client_id: String)` | Initialize with your Web Client ID from Google Cloud Console |
 | `isInitialized() -> bool` | Check if plugin is initialized |
 | `signIn()` | Start sign-in flow (auto-selects if previously authorized) |
+| `signInWithNonce(raw_nonce: String)` | Same as `signIn()` but uses a caller-supplied raw nonce for backend verification |
 | `signInWithAccountChooser()` | Sign in with account picker |
+| `signInWithAccountChooserWithNonce(raw_nonce: String)` | Same as `signInWithAccountChooser()` with a caller-supplied raw nonce |
 | `signInWithGoogleButton()` | Sign in using Google's branded button flow |
+| `signInWithGoogleButtonWithNonce(raw_nonce: String)` | Same as `signInWithGoogleButton()` with a caller-supplied raw nonce |
 | `signOut()` | Sign out and clear credential state |
+| `silentSignIn()` | Attempt non-interactive sign-in; emits `silent_sign_in_failed` if interaction would be required |
+| `silentSignInWithNonce(raw_nonce: String)` | Same as `silentSignIn()` with a caller-supplied raw nonce |
 
 ### Signals
 
 | Signal | Parameters | Description |
 |--------|------------|-------------|
-| `sign_in_success` | `id_token: String, email: String, display_name: String` | Emitted on successful sign-in |
-| `sign_in_failed` | `error: String` | Emitted when sign-in fails |
+| `sign_in_success` | `id_token: String, email: String, display_name: String` | Emitted on successful sign-in (all methods including silent) |
+| `sign_in_failed` | `error: String` | Emitted when an interactive sign-in fails |
+| `silent_sign_in_failed` | `error: String` | Emitted when sign-in fails with an unrecoverable error (interactive or silent) |
 | `sign_out_complete` | None | Emitted when sign-out completes |
 
 ## Firebase Authentication
@@ -136,6 +144,99 @@ func _sign_in_with_firebase(google_id_token: String):
     http.request(url, ["Content-Type: application/json"], HTTPClient.METHOD_POST, JSON.stringify(body))
 ```
 
+## Backend Verification with Nonce (Supabase / Firebase / Custom OIDC)
+
+Backends that enforce OIDC replay protection (e.g. Supabase `signInWithIdToken`, Firebase Admin SDK) require a **raw nonce** to verify the ID token's `nonce` claim.
+
+**How it works:**
+1. Your app generates a random raw nonce.
+2. You pass it to one of the `WithNonce` methods; the plugin SHA-256 hashes it and forwards the hash to Google.
+3. Google embeds that hash in the ID token's `nonce` claim.
+4. On `sign_in_success` you send both the `id_token` **and** your original raw nonce to your backend; the backend hashes the raw nonce and compares it to the claim.
+
+```gdscript
+extends Node
+
+var google_sign_in: Object = null
+var _raw_nonce: String = ""
+
+func _ready():
+    if OS.get_name() == "Android" and Engine.has_singleton("GodotGoogleSignIn"):
+        google_sign_in = Engine.get_singleton("GodotGoogleSignIn")
+        google_sign_in.connect("sign_in_success", _on_sign_in_success)
+        google_sign_in.connect("sign_in_failed", _on_sign_in_failed)
+        google_sign_in.initialize("YOUR_WEB_CLIENT_ID.apps.googleusercontent.com")
+
+func sign_in_with_backend():
+    if google_sign_in:
+        # Generate a cryptographically random raw nonce
+        var crypto = Crypto.new()
+        _raw_nonce = crypto.generate_random_bytes(32).hex_encode()
+        google_sign_in.signInWithNonce(_raw_nonce)
+
+func _on_sign_in_success(id_token: String, email: String, display_name: String):
+    # Send id_token + raw nonce to your backend
+    _authenticate_with_supabase(id_token, _raw_nonce)
+
+func _authenticate_with_supabase(id_token: String, raw_nonce: String):
+    # Example: Supabase signInWithIdToken
+    var body = JSON.stringify({
+        "provider": "google",
+        "id_token": id_token,
+        "nonce": raw_nonce  # raw (unhashed) nonce
+    })
+    # POST to your Supabase endpoint ...
+```
+
+## Silent Sign-In (Auto-Login / Session Recovery)
+
+Use `silentSignIn()` to attempt sign-in without showing any UI — ideal for auto-login on startup or recovering a session after a 401 error.
+
+**How it works:**
+- Credential Manager attempts to resolve the sign-in automatically using a previously authorized account with `setAutoSelectEnabled(true)`.
+- If exactly one authorized account is available it resolves silently and `sign_in_success` is emitted — no UI is shown.
+- If no authorized account can be resolved automatically, `silent_sign_in_failed` is emitted immediately. The app can then decide whether to call `signIn()` / `signInWithGoogleButton()` to show the full picker, or leave the user in an anonymous/logged-out state.
+
+```gdscript
+# Using the google_sign_in.gd wrapper (recommended)
+extends Node
+
+@onready var auth = $GoogleSignIn  # node with google_sign_in.gd attached
+
+func _ready() -> void:
+    auth.initialize("YOUR_WEB_CLIENT_ID.apps.googleusercontent.com")
+    auth.sign_in_success.connect(_on_sign_in_success)
+    auth.sign_in_failed.connect(_on_sign_in_failed)
+    auth.silent_sign_in_failed.connect(_on_silent_sign_in_failed)
+
+    # Try silent sign-in first; only show UI if it fails.
+    auth.silent_sign_in()
+
+func _on_sign_in_success(id_token: String, email: String, _display_name: String) -> void:
+    print("Signed in as: ", email)
+
+func _on_sign_in_failed(error: String) -> void:
+    print("Interactive sign-in failed: ", error)
+
+func _on_silent_sign_in_failed(_error: String) -> void:
+    # No authorized account — show the picker or stay logged out.
+    auth.sign_in_with_google_button()
+```
+
+For backend verification combine silent sign-in with a nonce:
+
+```gdscript
+var _raw_nonce: String = ""
+
+func try_auto_login() -> void:
+    var crypto = Crypto.new()
+    _raw_nonce = crypto.generate_random_bytes(32).hex_encode()
+    auth.silent_sign_in_with_nonce(_raw_nonce)
+
+func _on_sign_in_success(id_token: String, _email: String, _display_name: String) -> void:
+    _authenticate_with_backend(id_token, _raw_nonce)
+```
+
 ## Building from Source
 
 ### Requirements
@@ -147,16 +248,52 @@ func _sign_in_with_firebase(google_id_token: String):
 ### Build Steps
 
 1. Clone this repository
-2. Navigate to `plugin/`
-3. Update `local.properties` with your Android SDK path:
+
+2. **Download the Godot AAR library** and place it in `plugin/libs/`:
+   - On the [Godot downloads page](https://godotengine.org/download), find the "AAR" link for your platform and version
+   - Or download directly, e.g.:
+     ```bash
+     # Adjust the version number to match your Godot version
+     cp ~/Downloads/godot-lib.*.aar plugin/libs/
+     ```
+   - See `plugin/libs/README.md` for more options (TuxFamily, local Godot installation)
+
+3. **Point Gradle at your Android SDK** — choose the method for your platform:
+
+   **macOS / Linux** — set the `ANDROID_HOME` environment variable:
+   ```bash
+   export ANDROID_HOME=~/Library/Android/sdk   # macOS typical path
+   # or add to your shell profile to make it permanent
+   ```
+
+   **Windows** — create `plugin/local.properties`:
    ```
    sdk.dir=C\:\\Users\\YourName\\AppData\\Local\\Android\\Sdk
    ```
-4. Build:
+
+4. **Build** from the `plugin/` directory:
+
+   **macOS / Linux:**
    ```bash
-   ./gradlew assembleRelease
+   cd plugin && ./gradlew bundleReleaseAar
    ```
-5. The AAR will be in `build/outputs/aar/`
+
+   **Windows:**
+   ```bat
+   cd plugin
+   gradlew.bat assembleRelease
+   ```
+
+   A successful build prints `BUILD SUCCESSFUL` and produces the AAR at:
+   ```
+   plugin/build/outputs/aar/GoogleSignIn-release.aar
+   ```
+
+5. Copy the AAR to your Godot project's `addons/GodotGoogleSignIn/` folder.
+   You may need to rename it:
+   ```bash
+   mv GoogleSignIn-release.aar GodotGoogleSignIn-release.aar
+   ```
 
 ## Dependencies
 
